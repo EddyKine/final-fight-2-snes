@@ -1,0 +1,66 @@
+FINAL FIGHT 2 — APP PORTABLE PARA MAC
+Versión local de prueba 0.1.1 — 6 de noviembre de 2026
+
+Requisitos: Mac Apple Silicon (M1 o posterior), macOS 26 o posterior.
+No necesita Homebrew, SDL, Python, CMake ni herramientas de desarrollo.
+No es una versión para Intel, Windows o Linux.
+
+INICIO
+1. Descomprime el ZIP y copia Final Fight 2.app a la carpeta que prefieras.
+2. Abre la app. En la primera ejecución pulsa Browse For ROM y selecciona
+   tu respaldo Final Fight 2 (USA), formato .sfc o .smc.
+   La ROM no está incluida. Se verifica la revisión antes de jugar.
+3. Puedes configurar PLAYER 1 y PLAYER 2 y pulsar PLAY.
+
+CONFIGURACIÓN Y SCANLINES
+Antes de jugar, abre Settings.
+- Window scale: tamaño de ventana.
+- Fullscreen: pantalla completa.
+- Display aspect: proporción de imagen.
+- Audio: frecuencia y volumen.
+- Controles: Configure en la página de cada jugador.
+- Scanlines: Renderer = OpenGL; Shader = Scanlines Finas Suaves (recomendado)
+  o Scanlines Finas Marcadas. Una sola fila física oscura por grupo,
+  como el enfoque del configurador de Tatsunoko vs. Capcom. Sin tinte ni rejilla.
+  A 672/1080 píxeles de alto las líneas se repiten cada 2 píxeles; a 1440 cada 3.
+  Sustituyen LCD Grid y Warm Composite. CRT Soft y Sharp siguen disponibles.
+  Si no aparecen, Browse > assets > shaders > scanlines-finas-suaves.glslp.
+- Para quitar el efecto: Shader = None / Clear. Puedes volver a Renderer Auto.
+Los cambios se guardan al pulsar PLAY o cerrar el menú. El filtro está
+apagado inicialmente. En perfiles nuevos el renderizador es OpenGL.
+
+CONFIGURAR DURANTE LA PARTIDA / PAUSA
+Pulsa Ctrl+L. El juego y el audio se congelan automáticamente.
+Abre Settings, cambia el filtro o volumen, vuelve con Back y pulsa RESUME.
+No pierdes el punto de la partida. Cerrar la ventana del menú también vuelve.
+Si pausaste primero con Shift+P, al volver seguirás en pausa: pulsa Shift+P.
+Si pausaste con Start dentro del juego, al volver pulsa Start para continuar.
+Cambios que requieren reiniciar (renderizador, frecuencia de audio, ROM o mods)
+se guardan para la próxima apertura; no se reinicia la partida actual.
+En perfiles anteriores con Renderer Auto/SDL, elige OpenGL y vuelve a abrir
+el juego una vez. A partir de ahí los filtros pueden cambiarse desde la pausa.
+El menú también admite Tab, flechas y Espacio para navegar.
+
+TECLADO POR DEFECTO
+Mover: flechas. Start: Return. Select: Shift derecho.
+A SNES: X; B: Z; X: S; Y: A; L: C; R: V.
+Pausa: Shift+P. Reiniciar: Ctrl+R. Pantalla completa: Alt+Return.
+El menú permite cambiar las asignaciones y configurar mandos.
+
+DATOS Y TRASLADO
+La app contiene sus librerías y recursos. Puedes moverla con el juego cerrado.
+Los ajustes, la ruta de tu ROM, estados y registros se guardan en:
+~/Library/Application Support/EddyKine/Final Fight 2/
+Para conservarlos al cambiar de Mac, copia también esa carpeta y tu ROM.
+Si cambia la ruta de la ROM, selecciónala nuevamente con Browse For ROM.
+La app no copia ni incluye la ROM; debes mantener tu archivo disponible.
+No se importan ni modifican los datos de las versiones de desarrollo.
+
+NOTAS DE ESTA COMPILACIÓN
+Conserva las correcciones de los personajes al golpear y del borde inferior.
+Es una compilación local para probar. Firma ad hoc, sin notarización de Apple.
+Los estados guardados y rewind están deshabilitados hasta validar la
+serialización del scheduler. Mantén Run-ahead en Off.
+Licencias y créditos de terceros: Contents/Resources/Licenses y assets.
+El motor usa PolyForm Noncommercial 1.0.0: uso no comercial.
+Este ZIP no se ha publicado ni subido a GitHub.

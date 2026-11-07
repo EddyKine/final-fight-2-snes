@@ -1,0 +1,263 @@
+diff --git a/runner/runner.cmake b/runner/runner.cmake
+index 074e228..2032839 100644
+--- a/runner/runner.cmake
++++ b/runner/runner.cmake
+@@ -953,6 +953,7 @@ option(SNESRECOMP_SETUP_HOST
+ # would hand them a binary that cannot play and does not say why.
+ function(snesrecomp_target_generated_code target gen_dir)
+     file(GLOB _gen_sources CONFIGURE_DEPENDS "${gen_dir}/*.c")
++    list(FILTER _gen_sources EXCLUDE REGEX "/\\._[^/]*$")
+     if(_gen_sources)
+         if(SNESRECOMP_SETUP_HOST)
+             # Asked for a setup host while generated C is present: the two
+diff --git a/runner/src/beam_frame_driver.c b/runner/src/beam_frame_driver.c
+index d6086b3..41e8f0e 100644
+--- a/runner/src/beam_frame_driver.c
++++ b/runner/src/beam_frame_driver.c
+@@ -10,6 +10,10 @@
+ 
+ #include <stdbool.h>
+ #include <stdint.h>
++#include <stdlib.h>
++#include <stdio.h>
++
++#include "ppu_dma_trace.h"
+ 
+ #include "common_cpu_infra.h"
+ #include "common_rtl.h"
+@@ -99,13 +103,44 @@ static void advance_parked(uint64_t until) {
+   cart_sync_coprocessors(g_snes->cart, g_cpu.master_cycles);
+ }
+ 
+-static void run_interrupt(uint32_t vector, uint64_t deadline) {
++/* Opt-in bring-up path for titles whose IRQ handler spans a vblank. Keep
++ * its real frame on the guest stack and execute it through the normal beam
++ * scheduler, so a later NMI can interrupt it and RTI resumes the exact PC.
++ * The historical synchronous path remains available for differential runs. */
++static bool asynchronous_interrupts(void) {
++  static int enabled = -1;
++  if (enabled < 0) {
++    const char *value = getenv("SNESRECOMP_BEAM_ASYNC_INTERRUPTS");
++    enabled = value && value[0] == '1';
++    if (enabled) fprintf(stderr, "[beam] asynchronous interrupt scheduling enabled\n");
++  }
++  return enabled != 0;
++}
++
++static void run_interrupt(uint32_t vector, uint64_t deadline, bool is_nmi) {
+   /* The beam keeps running through the handler, as on hardware. A held beam
+    * cannot satisfy a handler that polls it -- Doom's reads OPVCT to choose its
+    * split, then waits for H-blank -- and the handler spins to the step cap.
+    * The bridge yields at the instruction that latched the IRQ, so the handler
+    * already starts where the real CPU would take it. */
++  if (asynchronous_interrupts() && getenv("SNESRECOMP_BEAM_INTERRUPT_TRACE")) {
++    fprintf(stderr, "[beam-interrupt] %s vector=$%06X return=$%06X S=$%04X "
++            "I=%u master=%llu\n", is_nmi ? "NMI" : "IRQ", vector,
++            s_resume_pc, g_cpu.S, g_cpu._flag_I,
++            (unsigned long long)g_cpu.master_cycles);
++  }
+   cpu_push_interrupt_frame_at(&g_cpu, s_resume_pc);
++  if (asynchronous_interrupts()) {
++    /* Hardware masks IRQ and clears decimal AFTER saving the old P. */
++    g_cpu._flag_I = 1;
++    g_cpu._flag_D = 0;
++    g_cpu.PB = (uint8_t)(vector >> 16);
++    cpu_mirrors_to_p(&g_cpu);
++    s_resume_pc = vector;
++    interp_bridge_set_lle_resume_pc(vector);
++    ppudma_note_interrupt(is_nmi);
++    return;
++  }
+   interp_bridge_set_master_deadline(deadline);
+   (void)interp_bridge_run_interrupt(&g_cpu, vector);
+   /* A deadline left armed stays true for every AOT block prologue afterwards
+@@ -114,6 +149,24 @@ static void run_interrupt(uint32_t vector, uint64_t deadline) {
+   update_resume_pc();
+ }
+ 
++/* Live scanout keeps each row paired with the VRAM/OAM/CGRAM the guest
++ * exposed at that beam position. Replaying only registers after CPU time
++ * can instead combine a new animation's tiles with an earlier sprite list. */
++static bool live_scanout(void) {
++  static int enabled = -1;
++  if (enabled < 0) {
++    const char *value = getenv("SNESRECOMP_BEAM_LIVE_RASTER");
++    enabled = value && value[0] == '1';
++    if (enabled) fprintf(stderr, "[beam] live scanout enabled\n");
++  }
++  return enabled != 0;
++}
++
++static void beam_draw_live_line(Snes *snes, unsigned line) {
++  if (snes->ppu && snes->ppu->renderBuffer)
++    ppu_runLine(snes->ppu, (int)line);
++}
++
+ void snes_beam_frame_driver_run_frame(void) {
+   const bool booting = s_resume_pc == 0;
+   int slices = 0;
+@@ -141,7 +194,8 @@ void snes_beam_frame_driver_run_frame(void) {
+   }
+   /* The render walk owns HDMA (see draw) and the CPU half owns the H/V
+    * comparator. Re-asserted per frame: a save-state load restores Snes. */
+-  snes_set_hdma_beam_enabled(g_snes, false);
++  snes_set_beam_scanout_hook(live_scanout() ? beam_draw_live_line : NULL);
++  snes_set_hdma_beam_enabled(g_snes, live_scanout());
+   snes_set_raster_irq_beam_enabled(true);
+   ppu_rasterBegin(g_ppu);
+ 
+@@ -150,8 +204,8 @@ void snes_beam_frame_driver_run_frame(void) {
+   if (!booting && g_snes->nmiEnabled) {
+     g_snes->inNmi = true;
+     s_wai_halted = false;
+-    run_interrupt(nmi_vector(), frame_end);
+-    g_snes->inNmi = false;
++    run_interrupt(nmi_vector(), frame_end, true);
++    if (!asynchronous_interrupts()) g_snes->inNmi = false;
+   }
+ 
+   /* Run out the field, taking each interrupt at the beam position it latches
+@@ -186,7 +240,7 @@ void snes_beam_frame_driver_run_frame(void) {
+       break;
+     if (irq_wanted()) {
+       s_wai_halted = false;
+-      run_interrupt(irq_vector(), frame_end);
++      run_interrupt(irq_vector(), frame_end, false);
+       continue;
+     }
+     /* Pay the beam what it owes first: those clocks can latch the next
+@@ -239,6 +293,7 @@ void snes_beam_frame_driver_draw_ppu_frame(void) {
+ void snes_beam_frame_driver_draw_ppu_frame_observed(
+     SnesBeamRasterObserver *observer, void *context) {
+   int line;
++  if (live_scanout()) return; /* already rendered against the live beam */
+ 
+   /* The field's register state as of its start, then each line's journal
+    * entries and HDMA in beam order. HDMA here is the real unit (dma.c), so
+@@ -268,4 +323,5 @@ void snes_beam_frame_driver_draw_ppu_frame_observed(
+ void snes_beam_frame_driver_reset(void) {
+   s_resume_pc = 0;
+   s_wai_halted = false;
++  snes_set_beam_scanout_hook(NULL);
+ }
+diff --git a/runner/src/desktop/host_main.c b/runner/src/desktop/host_main.c
+index 91ea98e..bdbc7e4 100644
+--- a/runner/src/desktop/host_main.c
++++ b/runner/src/desktop/host_main.c
+@@ -3251,6 +3251,10 @@ static void RunInGameLauncher(bool *running, const char **exit_reason) {
+         host_report_breadcrumb("in-game launcher: %s changed but the game could "
+                                "not be saved to restart; it applies next time "
+                                "the game starts", why);
++        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION,
++            "Configuracion guardada",
++            "Los cambios que requieren reiniciar se aplicaran al volver a abrir "
++            "el juego. La partida actual continua sin reiniciarse.", g_window);
+         ApplyLiveSettings(&before);
+       } else {
+         g_relaunch.pending = true;
+diff --git a/runner/src/desktop/opengl.c b/runner/src/desktop/opengl.c
+index e9063a7..e444d1e 100644
+--- a/runner/src/desktop/opengl.c
++++ b/runner/src/desktop/opengl.c
+@@ -124,8 +124,10 @@ static void LoadShaderFromConfig(void) {
+   }
+   snprintf(g_shader_path, sizeof(g_shader_path), "%s", want);
+   g_shader_resolved = true;
+-  if (want[0])
++  if (want[0]) {
+     g_glsl_shader = GlslShader_CreateFromFile(want);
++    fprintf(stderr, "[Shader] %s: %s\n", g_glsl_shader ? "loaded" : "failed", want);
++  }
+ }
+ 
+ static bool OpenGLRenderer_Init(SDL_Window *window) {
+diff --git a/runner/src/launcher_cache.c b/runner/src/launcher_cache.c
+index b425c72..5005d05 100644
+--- a/runner/src/launcher_cache.c
++++ b/runner/src/launcher_cache.c
+@@ -3,9 +3,16 @@
+ #include "host_paths.h"
+ 
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ 
+ static void rom_cache_path(char *out, size_t max_len) {
++    /* Signed app bundles must never acquire a mutable ROM cache inside MacOS. */
++    const char *override = getenv("SNESRECOMP_ROM_CACHE");
++    if (override && override[0]) {
++        snprintf(out, max_len, "%s", override);
++        return;
++    }
+     if (!snesrecomp_exe_dir_path("rom.cfg", out, max_len))
+         snprintf(out, max_len, "rom.cfg");
+ }
+diff --git a/runner/src/snes/snes.c b/runner/src/snes/snes.c
+index 6ce8b08..f4236ec 100644
+--- a/runner/src/snes/snes.c
++++ b/runner/src/snes/snes.c
+@@ -64,6 +64,18 @@ static void snes_trace_direct_wram_write(uint32_t off, uint8_t old, uint8_t val)
+ }
+ #endif
+ 
++static SnesBeamScanoutHook *s_beam_scanout_hook;
++static unsigned s_beam_scanout_clock = 512;
++
++void snes_set_beam_scanout_hook(SnesBeamScanoutHook *hook) {
++  s_beam_scanout_hook = hook;
++  /* Match the retained LakeSnes reference's mid-line sampling point.
++   * The old HBlank sample could see a forced-blank write made AFTER the
++   * visible portion of the last line and black out that entire row. */
++  const char *clock = getenv("SNESRECOMP_BEAM_SCANOUT_CLOCK");
++  s_beam_scanout_clock = clock && atoi(clock) == 1024 ? 1024u : 512u;
++}
++
+ void snes_set_hdma_beam_enabled(Snes *snes, bool enabled) {
+   snes->hdmaBeamOff = !enabled;
+ }
+@@ -411,6 +423,9 @@ static uint32_t snes_advance_beam(Snes *snes, uint32_t clocks, bool check_irq) {
+      * than after the rest of the scanline has already been consumed. */
+     if (check_irq && v < 225u && h < 1024u && span > 1024u - h)
+       span = 1024u - h;
++    if (check_irq && s_beam_scanout_hook && v < 225u &&
++        h < s_beam_scanout_clock && span > s_beam_scanout_clock - h)
++      span = s_beam_scanout_clock - h;
+     if (span > clocks) span = clocks;
+ 
+     /* Automatic joypad polling begins at vblank and keeps HVBJOY.0 asserted
+@@ -458,6 +473,10 @@ static uint32_t snes_advance_beam(Snes *snes, uint32_t clocks, bool check_irq) {
+         snes->dbgLatchedThisField = 1;
+         h += upto;
+         consumed += upto;
++        if (s_beam_scanout_hook && v < 225u && h == s_beam_scanout_clock)
++          s_beam_scanout_hook(snes, v);
++        if (s_beam_scanout_hook && v < 225u && h == 1024u && !snes->hdmaBeamOff)
++          dma_doHdma(snes->dma);
+         if (h >= 1364u) {
+           h = 0; v++; if (v >= 262u) v = 0;
+           if (v == 225u) { snes->rdnmiPending = true; ppu_rasterFieldBoundary(); }
+@@ -487,6 +506,8 @@ static uint32_t snes_advance_beam(Snes *snes, uint32_t clocks, bool check_irq) {
+      * mode-7 shaft in mode 1, a full screen of garbage under an intact HUD.
+      * It fired from inside guest register writes, because those sync the
+      * master clock and the beam advance runs HDMA. One call, gated. */
++    if (check_irq && s_beam_scanout_hook && v < 225u && h == s_beam_scanout_clock)
++      s_beam_scanout_hook(snes, v);
+     if (check_irq && !snes->hdmaBeamOff && v < 225u && h == 1024u)
+       dma_doHdma(snes->dma);
+     if (h >= 1364u) {
+diff --git a/runner/src/snes/snes.h b/runner/src/snes/snes.h
+index 013e785..f84a8ed 100644
+--- a/runner/src/snes/snes.h
++++ b/runner/src/snes/snes.h
+@@ -151,6 +151,11 @@ void snes_set_master_clock_charge_hook(SnesMasterClockChargeHook hook);
+ void snes_set_wram_write_log_hook(SnesWramWriteLogHook hook);
+ /* Next comparator edge for hosts that deliver each raster IRQ separately. */
+ void snes_set_hdma_beam_enabled(Snes *snes, bool enabled);
++/* Optional scanout observer at mid-line H=512 (line 0 is pre-render).
++ * It may render the live PPU but must not advance the CPU or beam. */
++typedef void SnesBeamScanoutHook(Snes *snes, unsigned line);
++void snes_set_beam_scanout_hook(SnesBeamScanoutHook *hook);
++
+ /* Raster-IRQ ownership. A frame-model host that runs the CPU half of a frame
+  * first and then delivers every H/V IRQ from its own raster walk, at the line
+  * the comparator names, owns the comparator: the CPU-half beam must not ALSO

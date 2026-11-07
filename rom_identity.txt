@@ -1,0 +1,26 @@
+# ROM identity for Final Fight 2 — the single source of truth.
+#
+# Read by three consumers, so a revision change is made once, here:
+#   - the build   (CMake generates snesrecomp_rom_identity.h from this file)
+#   - tools/regen.sh
+#   - .github/workflows/release.yml
+#
+# Format is `key = value`, one per line; `#` starts a comment. Values may be
+# quoted. Leaving a digest empty means the build cannot verify a ROM it is
+# handed — it will say so rather than accept it.
+
+display_name    = Final Fight 2
+rom_file        = Final Fight 2 (USA).sfc
+# Every digest of the bare image (copier header stripped), so the Retro
+# catalog can take a submission's identity from this file rather than ask
+# the submitter to hash the ROM again. The build verifies on crc32/sha256.
+expected_crc32  = 8c37ff55
+expected_md5    = 262616f80a6c194527d41e2c72b61aca
+expected_sha1   = 462ce5dc82a5411a3698904ea9bab993850a2175
+expected_sha256 = 744d1a16c3f99970283597ae8f43b7c3621c5f995c4566ef24b8d70b0692007b
+rom_size        = 1310720
+mapping         = lorom
+region          = USA
+# What a mod package's [[target]] game_id must name to apply to this title
+# (snesrecomp/docs/MOD_PACKAGES.md). Stable across revisions on purpose.
+game_id         = finalfight2-usa
